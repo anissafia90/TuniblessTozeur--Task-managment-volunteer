@@ -9,76 +9,39 @@ const registerUser = async (req, res) => {
   try {
     const { email, name, password } = req.body;
 
-    // const decision = await aj.protect(req, { email });
-    // console.log("Arcjet decision", decision.isDenied());
-
-    // if (decision.isDenied()) {
-    //   return res.status(403).json({ message: "Invalid email address" });
-    // }
-
-    const existingUser = await User.findOne({ email });
-
-    if (existingUser) {
-      return res.status(400).json({
-        message: "Email address already in use",
-      });
+    if (!email || !password || !name) {
+      return res.status(400).json({ message: "Missing fields" });
     }
 
-    const salt = await bcrypt.genSalt(10);
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: "Email already exists" });
+    }
 
-    const hashPassword = await bcrypt.hash(password, salt);
+    const hashPassword = await bcrypt.hash(password, 10);
 
     const newUser = await User.create({
       email,
       password: hashPassword,
       name,
+      isEmailVerified: true, // ⬅️ عطّل verification
     });
 
-    const verificationToken = jwt.sign(
-      { userId: newUser._id, purpose: "email-verification" },
-      process.env.JWT_SECRET,
-      { expiresIn: "1h" }
-    );
-
-    await Verification.create({
-      userId: newUser._id,
-      token: verificationToken,
-      expiresAt: new Date(Date.now() + 1 * 60 * 60 * 1000),
+    const token = jwt.sign({ userId: newUser._id }, process.env.JWT_SECRET, {
+      expiresIn: "7d",
     });
-
-    // send email
-    const verificationLink = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
-    const emailBody = `<p>Click <a href="${verificationLink}">here</a> to verify your email</p>`;
-    const emailSubject = "Verify your email";
-
-    // Skip email in dev if SendGrid is not configured
-    if (
-      process.env.SEND_GRID_API &&
-      process.env.SEND_GRID_API.startsWith("SG.")
-    ) {
-      const isEmailSent = await sendEmail(email, emailSubject, emailBody);
-      if (!isEmailSent) {
-        return res.status(500).json({
-          message: "Failed to send verification email",
-        });
-      }
-    } else {
-      console.log(
-        "⚠️  Email skipped (SendGrid not configured). Verification link:",
-        verificationLink
-      );
-      // Auto-verify in dev mode
-      newUser.isEmailVerified = true;
-      await newUser.save();
-    }
 
     res.status(201).json({
-      message:
-        "Verification email sent to your email. Please check and verify your account.",
+      message: "User registered",
+      token,
+      user: {
+        id: newUser._id,
+        email: newUser.email,
+        name: newUser.name,
+      },
     });
-  } catch (error) {
-    console.log(error);
-
+  } catch (err) {
+    console.error("REGISTER ERROR:", err);
     res.status(500).json({ message: "Internal server error" });
   }
 };
@@ -96,8 +59,8 @@ const loginUser = async (req, res) => {
       return res.status(400).json({ message: "Invalid email or password" });
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) {
       return res.status(400).json({ message: "Invalid email or password" });
     }
 
@@ -105,16 +68,14 @@ const loginUser = async (req, res) => {
       expiresIn: "7d",
     });
 
-    user.lastLogin = new Date();
-    await user.save();
-
-    const userData = user.toObject();
-    delete userData.password;
-
     res.status(200).json({
       message: "Login successful",
       token,
-      user: userData,
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+      },
     });
   } catch (err) {
     console.error("LOGIN ERROR:", err);
